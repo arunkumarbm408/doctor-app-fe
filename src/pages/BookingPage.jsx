@@ -4,13 +4,11 @@ import { useDispatch, useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   bookAppointment,
-  createRazorpayOrder,
   submitPayment,
-  verifyRazorpayPayment,
 } from "../features/appointments/appointmentsSlice";
 import { fetchDoctorDetails } from "../features/doctors/doctorsSlice";
-import { loadRazorpayScript, openRazorpayCheckout } from "../utils/razorpayCheckout";
 import { currency } from "../utils/formatters";
+import useRazorpayPayment from "../hooks/useRazorpayPayment";
 
 const suggestedSlots = ["10:00 - 10:30", "10:30 - 11:00", "11:00 - 11:30", "11:30 - 12:00"];
 
@@ -18,9 +16,9 @@ const BookingPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { user } = useSelector((state) => state.auth);
   const { doctor, bookedSlots } = useSelector((state) => state.doctors);
   const { bookingLoading, error } = useSelector((state) => state.appointments);
+  const { processPayment } = useRazorpayPayment();
   const [paymentError, setPaymentError] = useState("");
   const [form, setForm] = useState({
     appointmentDate: "",
@@ -43,38 +41,6 @@ const BookingPage = () => {
     [bookedSlots, form.appointmentDate]
   );
 
-  const processRazorpayPayment = async (appointmentId) => {
-    const scriptLoaded = await loadRazorpayScript();
-    if (!scriptLoaded) throw new Error("Could not load Razorpay. Check your connection.");
-
-    const orderResult = await dispatch(createRazorpayOrder(appointmentId));
-    if (orderResult.error) throw new Error(orderResult.payload || "Failed to create payment order");
-
-    const order = orderResult.payload;
-    const keyId = order.keyId || import.meta.env.VITE_RAZORPAY_KEY_ID;
-    if (!keyId) throw new Error("Razorpay key is not configured");
-
-    const paymentResponse = await openRazorpayCheckout({
-      keyId,
-      orderId: order.orderId,
-      amount: order.amount,
-      currency: order.currency,
-      doctorName: doctor?.user?.name || order.doctorName,
-      user,
-    });
-
-    const verifyResult = await dispatch(
-      verifyRazorpayPayment({
-        appointmentId,
-        razorpay_order_id: paymentResponse.razorpay_order_id,
-        razorpay_payment_id: paymentResponse.razorpay_payment_id,
-        razorpay_signature: paymentResponse.razorpay_signature,
-      })
-    );
-
-    if (verifyResult.error) throw new Error(verifyResult.payload || "Payment verification failed");
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setPaymentError("");
@@ -88,7 +54,7 @@ const BookingPage = () => {
 
     try {
       if (paymentMethod === "Razorpay") {
-        await processRazorpayPayment(appointmentId);
+        await processPayment({ appointmentId, doctorName: doctor?.user?.name });
         navigate("/dashboard");
         return;
       }
